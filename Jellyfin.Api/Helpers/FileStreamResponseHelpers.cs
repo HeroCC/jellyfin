@@ -89,7 +89,13 @@ public static class FileStreamResponseHelpers
         var contentType = response.Content.Headers.ContentType?.ToString() ?? MediaTypeNames.Application.Octet; // Use a more generic default
 
         // Set the status code for the client response (e.g., 200 OK or 206 Partial Content)
-        httpContext.Response.StatusCode = (int)response.StatusCode;
+        // Some upstream servers return 200 despite supplying a valid byte Content-Range.
+        // Preserve the partial-response semantics so clients can seek correctly.
+        var partialBody = response.Content.Headers.ContentRange is { HasRange: true } contentRange
+            && contentRange.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase);
+        httpContext.Response.StatusCode = response.StatusCode == System.Net.HttpStatusCode.OK && partialBody
+            ? StatusCodes.Status206PartialContent
+            : (int)response.StatusCode;
 
         // Return the stream from the upstream server
         // IMPORTANT: Do not dispose the response stream here, FileStreamResult will handle it.
