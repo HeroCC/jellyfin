@@ -41,6 +41,7 @@ public class LibraryStructureController : BaseJellyfinApiController
     private readonly ILibraryMonitor _libraryMonitor;
     private readonly IDirectoryService _directoryService;
     private readonly IUserManager _userManager;
+    private readonly IReadOnlyList<ILibraryStorageProvider> _storageProviders;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryStructureController"/> class.
@@ -50,19 +51,28 @@ public class LibraryStructureController : BaseJellyfinApiController
     /// <param name="libraryMonitor">Instance of <see cref="ILibraryMonitor"/> interface.</param>
     /// <param name="directoryService">Instance of <see cref="IDirectoryService"/> interface.</param>
     /// <param name="userManager">Instance of <see cref="IUserManager"/> interface.</param>
+    /// <param name="storageProviders">Registered library storage providers.</param>
     public LibraryStructureController(
         IServerConfigurationManager serverConfigurationManager,
         ILibraryManager libraryManager,
         ILibraryMonitor libraryMonitor,
         IDirectoryService directoryService,
-        IUserManager userManager)
+        IUserManager userManager,
+        IEnumerable<ILibraryStorageProvider> storageProviders)
     {
         _appPaths = serverConfigurationManager.ApplicationPaths;
         _libraryManager = libraryManager;
         _libraryMonitor = libraryMonitor;
         _directoryService = directoryService;
         _userManager = userManager;
+        _storageProviders = storageProviders.ToArray();
     }
+
+    /// <summary>Lists plugin-provided library storage sources and their creation settings.</summary>
+    /// <returns>The registered providers. Stored secrets are excluded from provider descriptors.</returns>
+    [HttpGet("/Library/StorageProviders")]
+    public ActionResult<IEnumerable<LibraryStorageProviderInfo>> GetStorageProviders()
+        => Ok(_storageProviders.Select(provider => provider.GetInfo()));
 
     /// <summary>
     /// Gets all virtual folders.
@@ -84,6 +94,7 @@ public class LibraryStructureController : BaseJellyfinApiController
     /// <param name="paths">The paths of the virtual folder.</param>
     /// <param name="libraryOptionsDto">The library options.</param>
     /// <param name="refreshLibrary">Whether to refresh the library.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="204">Folder added.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost]
@@ -95,9 +106,35 @@ public class LibraryStructureController : BaseJellyfinApiController
         [FromQuery] CollectionTypeOptions? collectionType,
         [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] string[] paths,
         [FromBody] AddVirtualFolderDto? libraryOptionsDto,
-        [FromQuery] bool refreshLibrary = false)
+        [FromQuery] bool refreshLibrary = false,
+        CancellationToken cancellationToken = default)
     {
         var libraryOptions = libraryOptionsDto?.LibraryOptions ?? new LibraryOptions();
+        if (!string.IsNullOrEmpty(libraryOptionsDto?.StorageProviderId))
+        {
+            var provider = _storageProviders.FirstOrDefault(candidate => candidate.Id == libraryOptionsDto.StorageProviderId);
+            if (provider is null)
+            {
+                return BadRequest("Unknown library storage provider.");
+            }
+
+            if (paths is { Length: > 0 } || libraryOptions.PathInfos is { Length: > 0 })
+            {
+                return BadRequest("Plugin storage sources cannot be combined with filesystem paths.");
+            }
+
+            try
+            {
+                await provider.CreateLibraryAsync(name, collectionType, libraryOptions,
+                    libraryOptionsDto.StorageOptions, refreshLibrary, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ArgumentException error)
+            {
+                return BadRequest(error.Message);
+            }
+
+            return NoContent();
+        }
 
         if (paths is not null && paths.Length > 0)
         {
