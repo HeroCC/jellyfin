@@ -166,15 +166,31 @@ public class LibraryStructureController : BaseJellyfinApiController
     /// </summary>
     /// <param name="name">The name of the folder.</param>
     /// <param name="refreshLibrary">Whether to refresh the library.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="204">Folder removed.</response>
     /// <response code="404">Folder not found.</response>
+    /// <response code="409">The library storage provider is not available.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpDelete]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult> RemoveVirtualFolder(
         [FromQuery] string name,
-        [FromQuery] bool refreshLibrary = false)
+        [FromQuery] bool refreshLibrary = false,
+        CancellationToken cancellationToken = default)
     {
+        var source = GetStorageSource(name);
+        if (source is not null)
+        {
+            var provider = _storageProviders.FirstOrDefault(candidate => candidate.Id == source.ProviderId);
+            if (provider is null)
+            {
+                return Conflict("The library storage provider is not available.");
+            }
+
+            await provider.RemoveLibraryAsync(source, cancellationToken).ConfigureAwait(false);
+        }
+
         // TODO: refactor! this relies on an FileNotFound exception to return NotFound when attempting to remove a library that does not exist.
         await _libraryManager.RemoveVirtualFolder(name, refreshLibrary).ConfigureAwait(false);
 
@@ -419,6 +435,11 @@ public class LibraryStructureController : BaseJellyfinApiController
         [FromBody, Required] MediaPathDto mediaPathDto,
         [FromQuery] bool refreshLibrary = false)
     {
+        if (GetStorageSource(mediaPathDto.Name) is not null)
+        {
+            return BadRequest("Library paths are managed by the storage provider.");
+        }
+
         _libraryMonitor.Stop();
 
         try
@@ -465,6 +486,11 @@ public class LibraryStructureController : BaseJellyfinApiController
             throw new ArgumentNullException(nameof(mediaPathRequestDto), "Name must not be null or empty");
         }
 
+        if (GetStorageSource(mediaPathRequestDto.Name) is not null)
+        {
+            return BadRequest("Library paths are managed by the storage provider.");
+        }
+
         _libraryManager.UpdateMediaPath(mediaPathRequestDto.Name, mediaPathRequestDto.PathInfo);
         return NoContent();
     }
@@ -487,6 +513,11 @@ public class LibraryStructureController : BaseJellyfinApiController
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (GetStorageSource(name) is not null)
+        {
+            return BadRequest("Library paths are managed by the storage provider.");
+        }
 
         _libraryMonitor.Stop();
 
@@ -520,15 +551,26 @@ public class LibraryStructureController : BaseJellyfinApiController
     /// Update library options.
     /// </summary>
     /// <param name="request">The library name and options.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="204">Library updated.</response>
+    /// <response code="400">The library options or provider settings are invalid.</response>
     /// <response code="404">Item not found.</response>
+    /// <response code="409">The library storage provider is not available.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("LibraryOptions")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public ActionResult UpdateLibraryOptions(
-        [FromBody] UpdateLibraryOptionsDto request)
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult> UpdateLibraryOptions(
+        [FromBody] UpdateLibraryOptionsDto request,
+        CancellationToken cancellationToken = default)
     {
+        if (request.LibraryOptions is null)
+        {
+            return BadRequest("Library options are required.");
+        }
+
         var item = _libraryManager.GetItemById<CollectionFolder>(request.Id);
         if (item is null)
         {
@@ -537,8 +579,31 @@ public class LibraryStructureController : BaseJellyfinApiController
 
         LibraryOptions options = item.GetLibraryOptions();
         // Storage ownership is server-managed, including when older clients omit it.
-        request.LibraryOptions!.StorageSource = options.StorageSource;
-        foreach (var mediaPath in request.LibraryOptions!.PathInfos)
+        request.LibraryOptions.StorageSource = options.StorageSource;
+        if (options.StorageSource is { } source)
+        {
+            var provider = _storageProviders.FirstOrDefault(candidate => candidate.Id == source.ProviderId);
+            if (provider is null)
+            {
+                return Conflict("The library storage provider is not available.");
+            }
+
+            request.LibraryOptions.PathInfos = options.PathInfos;
+            try
+            {
+                await provider.UpdateLibraryAsync(source, request.StorageOptions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ArgumentException error)
+            {
+                return BadRequest(error.Message);
+            }
+        }
+        else if (request.StorageOptions.Count > 0)
+        {
+            return BadRequest("This library does not have a storage provider.");
+        }
+
+        foreach (var mediaPath in request.LibraryOptions.PathInfos)
         {
             if (options.PathInfos.Any(i => i.Path == mediaPath.Path))
             {
@@ -550,5 +615,22 @@ public class LibraryStructureController : BaseJellyfinApiController
 
         item.UpdateLibraryOptions(request.LibraryOptions);
         return NoContent();
+    }
+
+    private LibraryStorageSource? GetStorageSource(string name)
+    {
+        var folders = _libraryManager.GetVirtualFolders();
+        var folder = folders.FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal));
+        if (folder?.LibraryOptions is { } options)
+        {
+            return options.StorageSource;
+        }
+
+        // Unscanned libraries have no item options yet. Read the persisted reference,
+        // also allowing filesystem-supported case aliases without targeting nonexistent paths.
+        var path = FileSystemHelper.GetChildPath(_appPaths.DefaultUserViewsPath, name);
+        return path is not null && Directory.Exists(path)
+            ? CollectionFolder.GetLibraryOptions(path).StorageSource
+            : null;
     }
 }

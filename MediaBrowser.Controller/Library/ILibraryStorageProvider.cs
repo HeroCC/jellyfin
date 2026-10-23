@@ -37,4 +37,33 @@ public interface ILibraryStorageProvider
         IReadOnlyDictionary<string, string> settings,
         bool refreshLibrary,
         CancellationToken cancellationToken);
+
+    /// <summary>Updates storage before the server saves the native library options.</summary>
+    /// <remarks>
+    /// Load configuration using the source identifier. Settings contain only submitted changes;
+    /// omitted settings, including credentials, must retain their stored values.
+    /// Keep the existing managed paths stable while reconfiguring their backing storage.
+    /// Do not save the native library here. Throwing prevents the server from saving its options.
+    /// Updates must tolerate retries if saving the native library subsequently fails.
+    /// </remarks>
+    /// <param name="source">The persisted storage reference.</param>
+    /// <param name="settings">Administrator-supplied changes to provider settings.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing storage configuration updates.</returns>
+    Task UpdateLibraryAsync(
+        LibraryStorageSource source,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken);
+
+    /// <summary>Releases managed storage resources before the server unregisters a native library.</summary>
+    /// <remarks>
+    /// Stop synchronization and release mounts, caches and stored configuration associated with
+    /// the source. Do not delete remote media or unregister the native library here.
+    /// Cleanup must be idempotent: unregistering can fail after cleanup and the server may retry.
+    /// Throwing leaves the native library registered so cleanup can be retried.
+    /// </remarks>
+    /// <param name="source">The persisted storage reference.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing storage cleanup.</returns>
+    Task RemoveLibraryAsync(LibraryStorageSource source, CancellationToken cancellationToken);
 }
