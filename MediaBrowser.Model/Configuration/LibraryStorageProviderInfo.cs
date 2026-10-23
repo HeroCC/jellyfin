@@ -12,4 +12,3 @@ public sealed class LibraryStorageProviderInfo
     /// <summary>Gets or sets the settings rendered by library creation clients.</summary>
     public LibraryStorageProviderField[] Fields { get; set; } = [];
 }
-

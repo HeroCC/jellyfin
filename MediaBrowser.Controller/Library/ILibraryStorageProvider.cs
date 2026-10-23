@@ -17,6 +17,12 @@ public interface ILibraryStorageProvider
     LibraryStorageProviderInfo GetInfo();
 
     /// <summary>Provisions storage and registers a native Jellyfin library.</summary>
+    /// <remarks>
+    /// The server supplies <see cref="LibraryOptions.StorageSource"/> before calling this method.
+    /// Persist provider configuration and credentials separately under its source identifier,
+    /// and pass these options, including the storage reference, to the native library manager.
+    /// Roll back provisioned resources and configuration if creation fails.
+    /// </remarks>
     /// <param name="name">The library display name.</param>
     /// <param name="collectionType">The native library content type, or null for mixed content.</param>
     /// <param name="options">Standard library options. The provider supplies its managed paths.</param>
@@ -24,6 +30,11 @@ public interface ILibraryStorageProvider
     /// <param name="refreshLibrary">Whether to start scanning the new library.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing library creation.</returns>
-    Task CreateLibraryAsync(string name, CollectionTypeOptions? collectionType, LibraryOptions options,
-        IReadOnlyDictionary<string, string> settings, bool refreshLibrary, CancellationToken cancellationToken);
+    Task CreateLibraryAsync(
+        string name,
+        CollectionTypeOptions? collectionType,
+        LibraryOptions options,
+        IReadOnlyDictionary<string, string> settings,
+        bool refreshLibrary,
+        CancellationToken cancellationToken);
 }

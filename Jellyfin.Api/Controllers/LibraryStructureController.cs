@@ -110,6 +110,11 @@ public class LibraryStructureController : BaseJellyfinApiController
         CancellationToken cancellationToken = default)
     {
         var libraryOptions = libraryOptionsDto?.LibraryOptions ?? new LibraryOptions();
+        if (libraryOptions.StorageSource is not null)
+        {
+            return BadRequest("Storage source identifiers are assigned by the server.");
+        }
+
         if (!string.IsNullOrEmpty(libraryOptionsDto?.StorageProviderId))
         {
             var provider = _storageProviders.FirstOrDefault(candidate => candidate.Id == libraryOptionsDto.StorageProviderId);
@@ -125,8 +130,18 @@ public class LibraryStructureController : BaseJellyfinApiController
 
             try
             {
-                await provider.CreateLibraryAsync(name, collectionType, libraryOptions,
-                    libraryOptionsDto.StorageOptions, refreshLibrary, cancellationToken).ConfigureAwait(false);
+                libraryOptions.StorageSource = new LibraryStorageSource
+                {
+                    ProviderId = provider.Id,
+                    SourceId = Guid.NewGuid()
+                };
+                await provider.CreateLibraryAsync(
+                    name,
+                    collectionType,
+                    libraryOptions,
+                    libraryOptionsDto.StorageOptions,
+                    refreshLibrary,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (ArgumentException error)
             {
@@ -521,6 +536,8 @@ public class LibraryStructureController : BaseJellyfinApiController
         }
 
         LibraryOptions options = item.GetLibraryOptions();
+        // Storage ownership is server-managed, including when older clients omit it.
+        request.LibraryOptions!.StorageSource = options.StorageSource;
         foreach (var mediaPath in request.LibraryOptions!.PathInfos)
         {
             if (options.PathInfos.Any(i => i.Path == mediaPath.Path))

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Serialization;
 using Jellyfin.Api.Controllers;
 using Jellyfin.Api.Models.LibraryStructureDto;
 using MediaBrowser.Controller.Configuration;
@@ -50,6 +52,8 @@ public class LibraryStorageProviderTests
             TestContext.Current.CancellationToken);
 
         Assert.IsType<NoContentResult>(result);
+        Assert.Equal("example", options.StorageSource!.ProviderId);
+        Assert.NotEqual(Guid.Empty, options.StorageSource.SourceId);
         _provider.Verify(value => value.CreateLibraryAsync("Movies", CollectionTypeOptions.movies, options, settings, true, TestContext.Current.CancellationToken), Times.Once);
         _libraries.Verify(value => value.AddVirtualFolder(It.IsAny<string>(), It.IsAny<CollectionTypeOptions?>(), It.IsAny<LibraryOptions>(), It.IsAny<bool>()), Times.Never);
     }
@@ -79,6 +83,35 @@ public class LibraryStorageProviderTests
 
         _libraries.Verify(value => value.AddVirtualFolder("Local", null, options, false), Times.Once);
         Assert.Equal("/media", Assert.Single(options.PathInfos).Path);
+    }
+
+    [Fact]
+    public void StorageReference_SurvivesLibraryOptionsSerialization()
+    {
+        var source = new LibraryStorageSource { ProviderId = "webdav", SourceId = Guid.NewGuid() };
+        var serializer = new XmlSerializer(typeof(LibraryOptions));
+        using var stream = new MemoryStream();
+        serializer.Serialize(stream, new LibraryOptions { StorageSource = source });
+        stream.Position = 0;
+
+        var restored = Assert.IsType<LibraryOptions>(serializer.Deserialize(stream));
+
+        Assert.Equal(source.ProviderId, restored.StorageSource!.ProviderId);
+        Assert.Equal(source.SourceId, restored.StorageSource.SourceId);
+    }
+
+    [Fact]
+    public async Task Creation_RejectsClientAssignedStorageReference()
+    {
+        var result = await Controller().AddVirtualFolder(
+            "Movies",
+            null,
+            [],
+            new AddVirtualFolderDto { LibraryOptions = new() { StorageSource = new() { ProviderId = "example", SourceId = Guid.NewGuid() } } },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        _libraries.Verify(value => value.AddVirtualFolder(It.IsAny<string>(), It.IsAny<CollectionTypeOptions?>(), It.IsAny<LibraryOptions>(), It.IsAny<bool>()), Times.Never);
     }
 
     private LibraryStructureController Controller()

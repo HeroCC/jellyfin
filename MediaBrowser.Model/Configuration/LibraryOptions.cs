@@ -58,6 +58,9 @@ namespace MediaBrowser.Model.Configuration
 
         public MediaPathInfo[] PathInfos { get; set; }
 
+        /// <summary>Gets or sets the plugin-managed storage reference, or null for ordinary libraries.</summary>
+        public LibraryStorageSource? StorageSource { get; set; }
+
         public bool SaveLocalMetadata { get; set; }
 
         [Obsolete("Disable remote providers in TypeOptions instead")]
